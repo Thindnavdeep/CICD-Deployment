@@ -1,15 +1,19 @@
+// index.js
 const express = require('express');
 const app = express();
-const PORT = process.env.PORT || process.env.APP_PORT || 3000;
 
+const PORT = process.env.PORT || 3000;
+
+// Sample route
 app.get('/', (req, res) => {
-  res.json({ message: 'Hello from sample-app', ts: new Date().toISOString() });
+  res.send('Hello from sample app!');
 });
 
 app.get('/health', (req, res) => res.sendStatus(200));
 
-app.listen(PORT, () => console.log(`Sample app listening on ${PORT}`));
+// Only start the server if this file is run directly
+if (require.main === module) {
+  const server = app.listen(PORT, () => console.log(`Sample app listening on ${PORT}`));
+}
 
-
-
-module.exports = app;
+module.exports = app; // 👈 Export the app only, not the server
