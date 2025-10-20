@@ -1,0 +1,67 @@
+name: CI/CD Build & Deploy (sample-app)
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  PROJECT_NAME: sample-app
+  DEPLOY_BASE: E:\\Deployments\\Projects
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Use Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install & Test
+        run: |
+          npm ci
+          npm test
+
+      - name: Archive artifact
+        run: |
+          mkdir artifact
+          # copy necessary files (adjust if you build)
+          cp -r package.json index.js node_modules artifact/ || true
+          cd artifact
+          zip -r ../artifact.zip .
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo -e "Host *\n  StrictHostKeyChecking no\n" > ~/.ssh/config
+
+      - name: Create releases dir on server
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p ${{ secrets.SERVER_SSH_PORT }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "powershell -Command 'if (!(Test-Path \"${{ env.DEPLOY_BASE }}\\${{ env.PROJECT_NAME }}\\releases\")) { New-Item -ItemType Directory -Path \"${{ env.DEPLOY_BASE }}\\${{ env.PROJECT_NAME }}\\releases\" -Force }'"
+
+      - name: Copy artifact to server
+        run: |
+          scp -i ~/.ssh/id_ed25519 -P ${{ secrets.SERVER_SSH_PORT }} artifact.zip ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:"/C:/temp/artifact.zip"
+        # note: using /C:/temp path to avoid scp path oddities on Windows
+      - name: Remote deploy: unpack and switch release
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p ${{ secrets.SERVER_SSH_PORT }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "powershell -Command \
+            \$projRoot='${{ env.DEPLOY_BASE }}\\${{ env.PROJECT_NAME }}'; \
+            \$releasesDir=Join-Path \$projRoot 'releases'; \
+            if (!(Test-Path \$releasesDir)) { New-Item -ItemType Directory -Path \$releasesDir -Force }; \
+            \$ts=Get-Date -Format 'yyyyMMddTHHmmssZ'; \
+            \$releaseDir=Join-Path \$releasesDir \$ts; New-Item -ItemType Directory -Path \$releaseDir -Force; \
+            Expand-Archive -Force -Path 'C:\\temp\\artifact.zip' -DestinationPath \$releaseDir; \
+            # update current
+            \$current = Join-Path \$projRoot 'current'; if (Test-Path \$current) { Remove-Item \$current -Recurse -Force }; Move-Item -Path \$releaseDir -Destination \$current; \
+            # ensure shared logs folder present
+            \$shared = Join-Path \$projRoot 'shared'; if (!(Test-Path \$shared)) { New-Item -ItemType Directory -Path \$shared -Force; New-Item -ItemType Directory -Path (Join-Path \$shared 'logs') -Force }; \
+            # run restart script
+            powershell -File (Join-Path '${{ env.DEPLOY_BASE }}' 'deploy-scripts\\restart-project.ps1') -ProjectName '${{ env.PROJECT_NAME }}' ; \
+          "
