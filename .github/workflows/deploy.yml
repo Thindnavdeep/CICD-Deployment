@@ -2,11 +2,11 @@ name: CI/CD Build & Deploy (sample-app)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
 
 env:
   PROJECT_NAME: sample-app
-  DEPLOY_BASE: E:\\Deployments\\Projects
+  DEPLOY_BASE: E:\Deployments\Projects
 
 jobs:
   build_and_deploy:
@@ -38,7 +38,6 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          # disable StrictHostKeyChecking for CI run (or better: add known_hosts)
           echo -e "Host *\n  StrictHostKeyChecking no\n" > ~/.ssh/config
 
       - name: Ensure remote temp folder exists
@@ -59,7 +58,6 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_SSH_PORT }}
           source: "artifact.zip"
-          # use a scp-friendly Windows path (leading slash + drive letter)
           target: "/C:/temp/"
 
       - name: Remote deploy: unpack, rotate, switch current and restart
@@ -70,20 +68,22 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_SSH_PORT }}
           script: |
-            powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-              "$projRoot = '${{ env.DEPLOY_BASE }}\\${{ env.PROJECT_NAME }}'; ^
-               $releasesDir = Join-Path $projRoot 'releases'; ^
-               if (!(Test-Path $releasesDir)) { New-Item -ItemType Directory -Path $releasesDir -Force } ; ^
-               $ts = Get-Date -Format 'yyyyMMddTHHmmssZ'; ^
-               $releaseDir = Join-Path $releasesDir $ts; ^
-               New-Item -ItemType Directory -Path $releaseDir -Force ; ^
-               Expand-Archive -Force -Path 'C:\\temp\\artifact.zip' -DestinationPath $releaseDir ; ^
-               $current = Join-Path $projRoot 'current'; ^
-               if (Test-Path $current) { Remove-Item $current -Recurse -Force } ; ^
-               Move-Item -Path $releaseDir -Destination $current ; ^
-               $shared = Join-Path $projRoot 'shared'; ^
-               if (!(Test-Path $shared)) { New-Item -ItemType Directory -Path $shared -Force ; New-Item -ItemType Directory -Path (Join-Path $shared 'logs') -Force } ; ^
-               # run the generic restart script we created earlier
-               & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path '${{ env.DEPLOY_BASE }}' 'deploy-scripts\\restart-project.ps1') -ProjectName '${{ env.PROJECT_NAME }}' ; ^
-               Write-Host 'Deployment finished.'"
-
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "
+              $projRoot = '${{ env.DEPLOY_BASE }}\\${{ env.PROJECT_NAME }}'
+              $releasesDir = Join-Path $projRoot 'releases'
+              if (!(Test-Path $releasesDir)) { New-Item -ItemType Directory -Path $releasesDir -Force }
+              $ts = Get-Date -Format 'yyyyMMddTHHmmssZ'
+              $releaseDir = Join-Path $releasesDir $ts
+              New-Item -ItemType Directory -Path $releaseDir -Force
+              Expand-Archive -Force -Path 'C:\temp\artifact.zip' -DestinationPath $releaseDir
+              $current = Join-Path $projRoot 'current'
+              if (Test-Path $current) { Remove-Item $current -Recurse -Force }
+              Move-Item -Path $releaseDir -Destination $current
+              $shared = Join-Path $projRoot 'shared'
+              if (!(Test-Path $shared)) {
+                New-Item -ItemType Directory -Path $shared -Force
+                New-Item -ItemType Directory -Path (Join-Path $shared 'logs') -Force
+              }
+              & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path '${{ env.DEPLOY_BASE }}' 'deploy-scripts\restart-project.ps1') -ProjectName '${{ env.PROJECT_NAME }}'
+              Write-Host 'Deployment finished.'
+            "
