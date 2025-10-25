@@ -1,13 +1,19 @@
-name: Deploy Node App
+name: Self-hosted CI/CD Deploy (sample-app)
 
 on:
   push:
-    branches: [ master ]
-  workflow_dispatch:  # manual trigger support
+    branches:
+      - master
+  workflow_dispatch:
+
+env:
+  PROJECT_NAME: sample-app
+  DEPLOY_BASE: E:\Deployments\Projects
 
 jobs:
-  build-deploy:
-    runs-on: [self-hosted, windows]  # match your runner labels
+  build_and_deploy:
+    runs-on: [self-hosted, windows]
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -15,18 +21,54 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: '18'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+        shell: powershell
 
       - name: Run tests
-        run: npm test
-
-      - name: Deploy app
         run: |
-          echo "Deploying app..."
-          # Example: restart your Node.js app (if using NSSM or PM2)
-          # nssm restart MyApp
-          # OR
-          # pm2 restart all
+          npm test
+        shell: powershell
+
+      - name: Prepare artifact on runner
+        run: |
+          Remove-Item -Recurse -Force artifact -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path artifact
+          Copy-Item -Path package.json, index.js -Destination artifact -Force
+          Compress-Archive -Path artifact\* -DestinationPath artifact.zip -Force
+        shell: powershell
+
+      - name: Deploy: extract, rotate releases, update current
+        run: |
+          $projRoot = "$Env:DEPLOY_BASE\$Env:PROJECT_NAME"
+          $releasesDir = Join-Path $projRoot 'releases'
+          if (!(Test-Path $releasesDir)) { New-Item -ItemType Directory -Path $releasesDir -Force }
+
+          $ts = Get-Date -Format 'yyyyMMddTHHmmssZ'
+          $releaseDir = Join-Path $releasesDir $ts
+          New-Item -ItemType Directory -Path $releaseDir -Force
+          Expand-Archive -Force -Path (Join-Path $PWD 'artifact.zip') -DestinationPath $releaseDir
+
+          $current = Join-Path $projRoot 'current'
+          if (Test-Path $current) { Remove-Item $current -Recurse -Force }
+          Move-Item -Path $releaseDir -Destination $current
+
+          $shared = Join-Path $projRoot 'shared'
+          if (!(Test-Path $shared)) {
+            New-Item -ItemType Directory -Path $shared -Force
+            New-Item -ItemType Directory -Path (Join-Path $shared 'logs') -Force
+          }
+
+      # Optional: restart if NSSM installed
+      - name: Restart service (optional)
+        if: ${{ always() }}
+        run: |
+          $restartScript = Join-Path $Env:DEPLOY_BASE 'deploy-scripts\restart-project.ps1'
+          if (Test-Path $restartScript) {
+              powershell -NoProfile -ExecutionPolicy Bypass -File $restartScript -ProjectName $Env:PROJECT_NAME
+          } else {
+              Write-Host "Restart script not found, skipping service restart."
+          }
+        shell: powershell
